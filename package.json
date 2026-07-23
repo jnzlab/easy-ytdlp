@@ -1,6 +1,6 @@
 {
   "name": "@jnzlab/easy-ytdlp",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A user-friendly interactive CLI wrapper for yt-dlp — no Python or flag memorization required",
   "type": "module",
   "main": "./dist/cli.js",
@@ -36,6 +36,14 @@
     "video"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jnzlab/easy-ytdlp.git"
+  },
+  "homepage": "https://github.com/jnzlab/easy-ytdlp#readme",
+  "bugs": {
+    "url": "https://github.com/jnzlab/easy-ytdlp/issues"
+  },
   "dependencies": {
     "@clack/prompts": "^0.10.0",
     "cli-progress": "^3.12.0",
