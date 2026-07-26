@@ -83,8 +83,10 @@ export function needsFfmpeg(mode: string, extras: {
   embedSubs?: boolean;
   embedThumbnail?: boolean;
   extractAudio?: boolean;
+  remuxVideo?: boolean;
 }): boolean {
-  if (mode === 'video' || mode === 'video-only') return true;
+  if (mode === 'video') return true;
+  if (mode === 'video-only' && extras.remuxVideo) return true;
   if (mode === 'audio' || extras.extractAudio) return true;
   if (extras.embedSubs || extras.embedThumbnail) return true;
   return false;

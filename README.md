@@ -22,9 +22,37 @@ easy-ytdlp <url>
 ```bash
 easy-ytdlp                                 # prompts for URL
 easy-ytdlp https://youtu.be/dQw4w9WgXcQ    # start with a URL
+easy-ytdlp <url1> <url2>                  # download multiple URLs with shared settings
+easy-ytdlp --batch-file urls.txt          # read URLs from a file, one per line
 easy-ytdlp <url> --show-command            # preview the yt-dlp flags first
+easy-ytdlp <url> --yes --mode audio --audio-format mp3
 easy-ytdlp update-binary                   # force-refresh the cached yt-dlp binary
 ```
+
+Batch files may include blank lines and comments that start with `#`.
+When multiple URLs are provided, easy-ytdlp fetches metadata for each URL, then asks one set of questions using the first URL with valid metadata as the prompt context.
+The default wizard keeps common downloads short. Choose advanced options to customize subtitles, playlists, filename presets, containers, and embeds.
+
+### Non-interactive options
+
+Use `--yes` to skip prompts and run with defaults plus any flags you provide:
+
+```bash
+easy-ytdlp <url> --yes --mode video --quality 1080 --output ~/Videos
+easy-ytdlp <url> --yes --mode audio --audio-format mp3 --audio-quality good
+easy-ytdlp --batch-file urls.txt --yes --mode video --quality best
+```
+
+Useful flags:
+
+- `--mode video|audio|video-only|subs-only|thumbnail-only`
+- `--quality best|1080|720|480|<height>`
+- `--container best|mp4|mkv|webm`
+- `--audio-format best|mp3|m4a|opus|flac|wav`
+- `--subs none|embed|write|both --sub-langs en,es`
+- `--playlist single|all|range --playlist-range 2:5`
+- `--filename title|title-channel|title-date`
+- `--embed-thumbnail --embed-metadata --sponsorblock`
 
 ### Example session
 

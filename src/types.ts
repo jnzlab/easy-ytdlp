@@ -37,7 +37,7 @@ export type FilenamePreset = 'title' | 'title-channel' | 'title-date';
 
 /** Collected answers from the interactive question flow. */
 export interface Answers {
-  url: string;
+  urls: string[];
   mode: MediaMode;
   videoQuality?: VideoQuality;
   container?: ContainerPref;

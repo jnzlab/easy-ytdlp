@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type {
   Answers,
   AudioFormat,
+  AudioQuality,
   ContainerPref,
   FilenamePreset,
   MediaMode,
@@ -12,6 +13,7 @@ import type {
   VideoMeta,
   VideoQuality,
 } from './types.js';
+import { loadPreferences, savePreferences } from './preferences.js';
 import { showNote } from './ui.js';
 
 function isCancel(value: unknown): boolean {
@@ -34,7 +36,15 @@ function looksLikeUrl(input: string): boolean {
   }
 }
 
-function formatDuration(seconds?: number): string {
+/** Split user-provided text into individual URLs (space, comma, or newline separated). */
+function splitUrlList(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function formatDuration(seconds?: number): string {
   if (seconds == null || Number.isNaN(seconds)) return 'unknown duration';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -80,20 +90,96 @@ function isPlaylistUrl(url: string, meta: VideoMeta): boolean {
   }
 }
 
-export async function promptUrl(initial?: string): Promise<string> {
-  if (initial && looksLikeUrl(initial)) return initial;
+export function modeLabel(mode: MediaMode): string {
+  const labels: Record<MediaMode, string> = {
+    video: 'Video with audio',
+    audio: 'Audio only',
+    'video-only': 'Video only',
+    'subs-only': 'Subtitles only',
+    'thumbnail-only': 'Thumbnail only',
+  };
+  return labels[mode];
+}
 
-  const url = await p.text({
-    message: 'Paste the video URL',
-    placeholder: 'https://www.youtube.com/watch?v=…',
-    initialValue: initial ?? '',
+export function filenameLabel(preset: FilenamePreset): string {
+  const labels: Record<FilenamePreset, string> = {
+    title: 'Title only',
+    'title-channel': 'Title + Channel',
+    'title-date': 'Title + Upload Date',
+  };
+  return labels[preset];
+}
+
+export function playlistLabel(playlist: PlaylistMode): string {
+  if (playlist.kind === 'single') return 'Just this video';
+  if (playlist.kind === 'all') return 'Whole playlist';
+  return `Playlist items ${playlist.start}:${playlist.stop}`;
+}
+
+export function videoQualityLabel(quality?: VideoQuality): string {
+  if (!quality || quality === 'best') return 'Best available';
+  if (typeof quality === 'object') return `${quality.height}p`;
+  return `Up to ${quality}p`;
+}
+
+export function summarizeAnswers(answers: Answers, sourceCount = answers.urls.length): string {
+  const lines = [
+    'Download',
+    `  Mode        ${modeLabel(answers.mode)}`,
+    answers.mode === 'video' || answers.mode === 'video-only'
+      ? `  Quality     ${videoQualityLabel(answers.videoQuality)}`
+      : null,
+    answers.container ? `  Container   ${answers.container}` : null,
+    answers.mode === 'audio'
+      ? `  Audio       ${answers.audioFormat ?? 'best'} (${answers.audioQuality ?? 'best'})`
+      : null,
+    '',
+    'Sources',
+    `  URLs        ${sourceCount}`,
+    `  Playlist    ${playlistLabel(answers.playlist)}`,
+    '',
+    'Output',
+    `  Folder      ${answers.outputDir}`,
+    `  Filename    ${filenameLabel(answers.filenamePreset)}`,
+    '',
+    'Extras',
+    answers.subtitles.mode !== 'none'
+      ? `  Subtitles   ${answers.subtitles.mode} [${answers.subtitles.languages.join(', ')}]`
+      : '  Subtitles   none',
+    answers.embedThumbnail ? '  Thumbnail   embed' : null,
+    answers.embedMetadata ? '  Metadata    embed' : null,
+    answers.sponsorBlock ? '  SponsorBlock remove segments' : null,
+  ];
+
+  return lines.filter((line) => line != null).join('\n');
+}
+
+export async function promptUrls(initial?: string[]): Promise<string[]> {
+  if (initial && initial.length > 0) {
+    for (const u of initial) {
+      if (!looksLikeUrl(u)) {
+        p.log.error(`Invalid URL: ${u}`);
+        process.exit(1);
+      }
+    }
+    return initial;
+  }
+
+  const input = await p.text({
+    message: 'Paste video URL(s)',
+    placeholder: 'One or more URLs, separated by spaces or commas',
+    initialValue: '',
     validate: (v) => {
-      if (!v?.trim()) return 'URL is required';
-      if (!looksLikeUrl(v.trim())) return 'That does not look like a valid http(s) URL';
+      if (!v?.trim()) return 'At least one URL is required';
+      const urls = splitUrlList(v.trim());
+      if (urls.length === 0) return 'At least one valid URL is required';
+      for (const u of urls) {
+        if (!looksLikeUrl(u)) return `Invalid URL: ${u}`;
+      }
     },
   });
-  exitOnCancel(url);
-  return String(url).trim();
+  exitOnCancel(input);
+  return splitUrlList(String(input).trim());
 }
 
 /**
@@ -103,13 +189,6 @@ export async function askQuestions(
   url: string,
   meta: VideoMeta,
 ): Promise<Answers> {
-  const title = meta.title ?? 'Unknown title';
-  const uploader = meta.uploader ?? 'Unknown uploader';
-  const duration = formatDuration(meta.duration);
-
-  showNote(`${title}\nby ${uploader} · ${duration}`, 'Found');
-
-  // 1. What do you want?
   const mode = await p.select({
     message: 'What do you want to download?',
     options: [
@@ -121,14 +200,20 @@ export async function askQuestions(
     ],
   });
   exitOnCancel(mode);
+  const selectedMode = mode as MediaMode;
 
   let videoQuality: VideoQuality | undefined;
-  let container: ContainerPref | undefined;
+  let container: ContainerPref | undefined =
+    selectedMode === 'video' || selectedMode === 'video-only' ? 'best' : undefined;
   let audioFormat: AudioFormat | undefined;
-  let audioQuality: Answers['audioQuality'];
+  let audioQuality: AudioQuality | undefined;
+  let subMode: SubtitleMode = 'none';
+  let subLangs: string[] = [];
+  let playlist: PlaylistMode = { kind: 'single' };
+  let filenamePreset: FilenamePreset = 'title';
+  let extras: string[] = [];
 
-  // 2. Video quality + container
-  if (mode === 'video' || mode === 'video-only') {
+  if (selectedMode === 'video' || selectedMode === 'video-only') {
     const resolutions = availableResolutions(meta);
     const qualityOpts: { value: string; label: string }[] = [
       { value: 'best', label: 'Best available' },
@@ -164,22 +249,9 @@ export async function askQuestions(
     } else {
       videoQuality = q as '1080' | '720' | '480';
     }
-
-    const c = await p.select({
-      message: 'Container preference?',
-      options: [
-        { value: 'best' as ContainerPref, label: 'Best available' },
-        { value: 'mp4' as ContainerPref, label: 'mp4' },
-        { value: 'mkv' as ContainerPref, label: 'mkv' },
-        { value: 'webm' as ContainerPref, label: 'webm' },
-      ],
-    });
-    exitOnCancel(c);
-    container = c as ContainerPref;
   }
 
-  // 3. Audio options
-  if (mode === 'audio') {
+  if (selectedMode === 'audio') {
     const fmt = await p.select({
       message: 'Audio format?',
       options: [
@@ -205,11 +277,7 @@ export async function askQuestions(
     audioQuality = aq as 'best' | 'good';
   }
 
-  // 4. Subtitles
-  let subMode: SubtitleMode = 'none';
-  let subLangs: string[] = [];
-
-  if (mode === 'subs-only') {
+  if (selectedMode === 'subs-only') {
     subMode = 'write';
     const langs = availableSubtitleLangs(meta);
     if (langs.length === 0) {
@@ -228,7 +296,43 @@ export async function askQuestions(
       const sel = picked as string[];
       subLangs = sel.includes('all') ? ['all'] : sel;
     }
-  } else if (mode !== 'thumbnail-only') {
+  }
+
+  const prefs = await loadPreferences();
+  const defaultDir = prefs.outputDir ?? join(homedir(), 'Downloads');
+  const outDir = await p.text({
+    message: 'Destination folder',
+    initialValue: defaultDir,
+    validate: (v) => (!v?.trim() ? 'Folder is required' : undefined),
+  });
+  exitOnCancel(outDir);
+  const outputDir = String(outDir).trim();
+  await savePreferences({ ...prefs, outputDir });
+
+  const customize =
+    selectedMode === 'subs-only' || selectedMode === 'thumbnail-only'
+      ? false
+      : await p.confirm({
+          message: 'Customize advanced options?',
+          initialValue: false,
+        });
+  exitOnCancel(customize);
+
+  if (customize && (selectedMode === 'video' || selectedMode === 'video-only')) {
+    const c = await p.select({
+      message: 'Container preference?',
+      options: [
+        { value: 'best' as ContainerPref, label: 'Best available' },
+        { value: 'mp4' as ContainerPref, label: 'mp4' },
+        { value: 'mkv' as ContainerPref, label: 'mkv' },
+        { value: 'webm' as ContainerPref, label: 'webm' },
+      ],
+    });
+    exitOnCancel(c);
+    container = c as ContainerPref;
+  }
+
+  if (customize && selectedMode !== 'thumbnail-only') {
     const wantSubs = await p.confirm({
       message: 'Download subtitles?',
       initialValue: false,
@@ -265,137 +369,87 @@ export async function askQuestions(
       exitOnCancel(how);
       subMode = how as SubtitleMode;
     }
-  }
 
-  // 5. Playlist
-  let playlist: PlaylistMode = { kind: 'single' };
-  if (isPlaylistUrl(url, meta)) {
-    const pl = await p.select({
-      message: 'This URL is part of a playlist. What should we download?',
+    if (isPlaylistUrl(url, meta)) {
+      const pl = await p.select({
+        message: 'This URL is part of a playlist. What should we download?',
+        options: [
+          { value: 'single', label: 'Just this video' },
+          { value: 'all', label: 'Whole playlist' },
+          { value: 'range', label: 'A specific range' },
+        ],
+      });
+      exitOnCancel(pl);
+
+      if (pl === 'single') {
+        playlist = { kind: 'single' };
+      } else if (pl === 'all') {
+        playlist = { kind: 'all' };
+      } else {
+        const start = await p.text({
+          message: 'Playlist start index (1-based)',
+          initialValue: '1',
+          validate: (v) => {
+            const n = Number(v);
+            if (!Number.isInteger(n) || n < 1) return 'Enter a positive integer';
+          },
+        });
+        exitOnCancel(start);
+        const stop = await p.text({
+          message: 'Playlist stop index (inclusive)',
+          initialValue: String(meta.playlist_count ?? 10),
+          validate: (v) => {
+            const n = Number(v);
+            if (!Number.isInteger(n) || n < 1) return 'Enter a positive integer';
+          },
+        });
+        exitOnCancel(stop);
+        playlist = {
+          kind: 'range',
+          start: Number(start),
+          stop: Number(stop),
+        };
+      }
+    }
+
+    const pickedFilename = await p.select({
+      message: 'Filename style?',
       options: [
-        { value: 'single', label: 'Just this video' },
-        { value: 'all', label: 'Whole playlist' },
-        { value: 'range', label: 'A specific range' },
+        { value: 'title' as FilenamePreset, label: 'Title only' },
+        {
+          value: 'title-channel' as FilenamePreset,
+          label: 'Title + Channel',
+        },
+        {
+          value: 'title-date' as FilenamePreset,
+          label: 'Title + Upload Date',
+        },
       ],
     });
-    exitOnCancel(pl);
+    exitOnCancel(pickedFilename);
+    filenamePreset = pickedFilename as FilenamePreset;
 
-    if (pl === 'single') {
-      playlist = { kind: 'single' };
-    } else if (pl === 'all') {
-      playlist = { kind: 'all' };
-    } else {
-      const start = await p.text({
-        message: 'Playlist start index (1-based)',
-        initialValue: '1',
-        validate: (v) => {
-          const n = Number(v);
-          if (!Number.isInteger(n) || n < 1) return 'Enter a positive integer';
+    const e = await p.multiselect({
+      message: 'Extras (optional)',
+      options: [
+        {
+          value: 'thumbnail',
+          label: 'Embed thumbnail as cover art',
         },
-      });
-      exitOnCancel(start);
-      const stop = await p.text({
-        message: 'Playlist stop index (inclusive)',
-        initialValue: String(meta.playlist_count ?? 10),
-        validate: (v) => {
-          const n = Number(v);
-          if (!Number.isInteger(n) || n < 1) return 'Enter a positive integer';
+        { value: 'metadata', label: 'Embed metadata' },
+        {
+          value: 'sponsorblock',
+          label: 'SponsorBlock: remove sponsor segments',
         },
-      });
-      exitOnCancel(stop);
-      playlist = {
-        kind: 'range',
-        start: Number(start),
-        stop: Number(stop),
-      };
-    }
+      ],
+      required: false,
+    });
+    exitOnCancel(e);
+    extras = e as string[];
   }
 
-  // 6. Output location & filename
-  const defaultDir = join(homedir(), 'Downloads');
-  const outDir = await p.text({
-    message: 'Destination folder',
-    initialValue: defaultDir,
-    validate: (v) => (!v?.trim() ? 'Folder is required' : undefined),
-  });
-  exitOnCancel(outDir);
-
-  const filenamePreset = await p.select({
-    message: 'Filename style?',
-    options: [
-      { value: 'title' as FilenamePreset, label: 'Title only' },
-      {
-        value: 'title-channel' as FilenamePreset,
-        label: 'Title + Channel',
-      },
-      {
-        value: 'title-date' as FilenamePreset,
-        label: 'Title + Upload Date',
-      },
-    ],
-  });
-  exitOnCancel(filenamePreset);
-
-  // 7. Extras (multi-select)
-  const extras =
-    mode === 'subs-only' || mode === 'thumbnail-only'
-      ? []
-      : await (async () => {
-          const e = await p.multiselect({
-            message: 'Extras (optional)',
-            options: [
-              {
-                value: 'thumbnail',
-                label: 'Embed thumbnail as cover art',
-              },
-              { value: 'metadata', label: 'Embed metadata' },
-              {
-                value: 'sponsorblock',
-                label: 'SponsorBlock: remove sponsor segments',
-              },
-            ],
-            required: false,
-          });
-          exitOnCancel(e);
-          return e as string[];
-        })();
-
-  // 8. Confirm + show command toggle
-  const selectedMode = mode as MediaMode;
-  const selectedFilename = filenamePreset as FilenamePreset;
-
-  const summaryLines = [
-    `Mode: ${selectedMode}`,
-    videoQuality
-      ? `Quality: ${typeof videoQuality === 'object' ? `${videoQuality.height}p` : videoQuality}`
-      : null,
-    container ? `Container: ${container}` : null,
-    audioFormat ? `Audio: ${audioFormat} (${audioQuality ?? 'best'})` : null,
-    subMode !== 'none'
-      ? `Subtitles: ${subMode} [${subLangs.join(', ')}]`
-      : 'Subtitles: none',
-    `Playlist: ${playlist.kind}${playlist.kind === 'range' ? ` ${playlist.start}:${playlist.stop}` : ''}`,
-    `Output: ${String(outDir).trim()}`,
-    `Filename: ${selectedFilename}`,
-    extras.length ? `Extras: ${extras.join(', ')}` : 'Extras: none',
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  showNote(summaryLines, 'Summary');
-
-  const showCmd = await p.confirm({
-    message: 'Show the yt-dlp command before downloading?',
-    initialValue: false,
-  });
-  exitOnCancel(showCmd);
-
-  // Confirmation happens in cli.ts after flags are built:
-  //   showCmd yes → print command → "Run this command?"
-  //   showCmd no  → "Start download?"
-
-  return {
-    url,
+  const answers: Answers = {
+    urls: [url],
     mode: selectedMode,
     videoQuality,
     container,
@@ -406,11 +460,14 @@ export async function askQuestions(
       languages: subLangs,
     },
     playlist,
-    outputDir: String(outDir).trim(),
-    filenamePreset: selectedFilename,
+    outputDir,
+    filenamePreset,
     embedThumbnail: extras.includes('thumbnail'),
     embedMetadata: extras.includes('metadata'),
     sponsorBlock: extras.includes('sponsorblock'),
-    showCommand: Boolean(showCmd),
+    showCommand: false,
   };
+
+  showNote(summarizeAnswers(answers), 'Summary');
+  return answers;
 }

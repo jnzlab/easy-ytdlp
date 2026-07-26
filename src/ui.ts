@@ -41,16 +41,20 @@ export function showNote(body: string, title: string): void {
 }
 
 /**
- * Show saved file paths without a clack box — long absolute paths reliably
- * break `note()` borders even when wrapped.
+ * Show saved file paths. Uses clack's `log.success()` for each path
+ * instead of raw console.log, so the output stays visually consistent
+ * and avoids terminal artifacts from mixing clack-managed output with
+ * direct writes.
  */
 export function showSaved(paths: string[]): void {
-  p.log.step('Saved');
-  const width = contentWidth(4);
+  if (paths.length === 0) return;
+  if (paths.length === 1) {
+    p.log.success(paths[0]!);
+    return;
+  }
+  p.log.success(`Saved ${paths.length} files`);
   for (const filePath of paths) {
-    for (const line of wrapText(filePath, width).split('\n')) {
-      console.log(`  ${line}`);
-    }
+    p.log.info(filePath);
   }
 }
 

@@ -4,7 +4,7 @@ import type { Answers } from '../src/types.js';
 
 function base(overrides: Partial<Answers> = {}): Answers {
   return {
-    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    urls: ['https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
     mode: 'video',
     videoQuality: 'best',
     container: 'best',
@@ -32,7 +32,7 @@ describe('buildFlags', () => {
     expect(flags).toContain(FILENAME_TEMPLATES.title);
     expect(flags).toContain('--print');
     expect(flags).toContain('after_move:filepath');
-    expect(flags.at(-1)).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(flags).toContain('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
   });
 
   it('maps capped resolution via -S res:XXXX', () => {
@@ -172,6 +172,20 @@ describe('buildFlags', () => {
     expect(flags).toContain('--embed-metadata');
     expect(flags).toContain('--sponsorblock-remove');
     expect(flags).toContain('default');
+  });
+
+  it('keeps going across multiple URLs', () => {
+    const flags = buildFlags(
+      base({
+        urls: [
+          'https://example.com/one',
+          'https://example.com/two',
+        ],
+      }),
+    );
+    expect(flags[0]).toBe('--ignore-errors');
+    expect(flags).toContain('https://example.com/one');
+    expect(flags).toContain('https://example.com/two');
   });
 
   it('skips embed-thumbnail for thumbnail-only mode', () => {

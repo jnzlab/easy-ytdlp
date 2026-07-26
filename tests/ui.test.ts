@@ -4,6 +4,14 @@ import {
   parseProgressLine,
   progressFlags,
 } from '../src/downloader.js';
+import { needsFfmpeg } from '../src/ffmpeg.js';
+import {
+  filenameLabel,
+  modeLabel,
+  playlistLabel,
+  summarizeAnswers,
+} from '../src/questions.js';
+import type { Answers } from '../src/types.js';
 import { wrapText } from '../src/ui.js';
 import { youtubeCompatFlags } from '../src/youtube-compat.js';
 
@@ -35,9 +43,58 @@ describe('wrapText', () => {
   });
 });
 
+describe('display labels', () => {
+  it('uses friendly names for internal answer values', () => {
+    expect(modeLabel('subs-only')).toBe('Subtitles only');
+    expect(filenameLabel('title-channel')).toBe('Title + Channel');
+    expect(playlistLabel({ kind: 'range', start: 2, stop: 5 })).toBe(
+      'Playlist items 2:5',
+    );
+  });
+
+  it('formats grouped summaries', () => {
+    const answers: Answers = {
+      urls: ['https://example.com/one', 'https://example.com/two'],
+      mode: 'video',
+      videoQuality: '1080',
+      container: 'mp4',
+      subtitles: { mode: 'none', languages: [] },
+      playlist: { kind: 'single' },
+      outputDir: '/tmp/downloads',
+      filenamePreset: 'title-channel',
+      embedThumbnail: true,
+      embedMetadata: false,
+      sponsorBlock: true,
+      showCommand: false,
+    };
+
+    const summary = summarizeAnswers(answers);
+    expect(summary).toContain('Download');
+    expect(summary).toContain('Mode        Video with audio');
+    expect(summary).toContain('Quality     Up to 1080p');
+    expect(summary).toContain('URLs        2');
+    expect(summary).toContain('Filename    Title + Channel');
+    expect(summary).toContain('SponsorBlock remove segments');
+  });
+});
+
 describe('progressFlags', () => {
   it('includes newline so piped progress is parseable', () => {
     expect(progressFlags()).toEqual(['--newline', '--progress']);
+  });
+});
+
+describe('needsFfmpeg', () => {
+  it('does not require ffmpeg for plain video-only downloads', () => {
+    expect(needsFfmpeg('video-only', {})).toBe(false);
+  });
+
+  it('requires ffmpeg for video merging, audio extraction, embeds, and remuxing', () => {
+    expect(needsFfmpeg('video', {})).toBe(true);
+    expect(needsFfmpeg('audio', {})).toBe(true);
+    expect(needsFfmpeg('thumbnail-only', { embedThumbnail: true })).toBe(true);
+    expect(needsFfmpeg('subs-only', { embedSubs: true })).toBe(true);
+    expect(needsFfmpeg('video-only', { remuxVideo: true })).toBe(true);
   });
 });
 

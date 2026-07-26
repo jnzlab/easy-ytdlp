@@ -149,8 +149,13 @@ export function buildFlags(answers: Answers): string[] {
   // Always print final path after post-processing
   flags.push('--print', 'after_move:filepath');
 
-  // URL last (yt-dlp accepts URL anywhere, but trailing is conventional)
-  flags.push(answers.url);
+  // URLs last (yt-dlp accepts them anywhere, but trailing is conventional)
+  flags.push(...answers.urls);
+
+  // With multiple URLs, continue past errors on individual videos
+  if (answers.urls.length > 1) {
+    flags.unshift('--ignore-errors');
+  }
 
   return flags;
 }

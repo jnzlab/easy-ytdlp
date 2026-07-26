@@ -186,6 +186,7 @@ export function progressFlags(): string[] {
 export async function runDownload(
   ytDlp: YTDlpWrapInstance,
   flags: string[],
+  options: { label?: string } = {},
 ): Promise<DownloadResult> {
   const filepaths: string[] = [];
   let lastError = '';
@@ -214,7 +215,7 @@ export async function runDownload(
 
   let barStarted = false;
   let lastPercent = 0;
-  let phase = 'Downloading';
+  let phase = options.label ? `Downloading ${options.label}` : 'Downloading';
 
   const ensureBar = () => {
     if (!barStarted) {
@@ -234,7 +235,9 @@ export async function runDownload(
     // New stream/fragment after a finished one (e.g. video 100% → audio 0%)
     if (percent + 5 < lastPercent) {
       part += 1;
-      phase = `Downloading (${part})`;
+      phase = options.label
+        ? `Downloading ${options.label} (${part})`
+        : `Downloading (${part})`;
     }
     lastPercent = percent;
 
@@ -278,7 +281,9 @@ export async function runDownload(
       if (lastPercent >= 99) {
         part += 1;
         lastPercent = 0;
-        phase = `Downloading (${part})`;
+        phase = options.label
+          ? `Downloading ${options.label} (${part})`
+          : `Downloading (${part})`;
         ensureBar();
         bar.update(0, {
           phase,
