@@ -1,6 +1,6 @@
 {
   "name": "@jnzlab/easy-ytdlp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A user-friendly interactive CLI wrapper for yt-dlp — no Python or flag memorization required",
   "type": "module",
   "main": "./dist/cli.js",
