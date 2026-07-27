@@ -28,7 +28,7 @@ easy-ytdlp update-binary                   # force-refresh the cached yt-dlp bin
 
 ### Example session
 
-![easy-ytdlp demo](https://pub-453eda74623641f7967529680d3689bb.r2.dev/easy-ytdlp-demo.gif)
+![easy-ytdlp demo](https://pub-453eda74623641f7967529680d3689bb.r2.dev/demo.gif)
 
 ### Audio-only example
 
