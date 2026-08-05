@@ -5,6 +5,7 @@ import type {
   FilenamePreset,
   VideoQuality,
 } from './types.js';
+import { isPlaylistOnlyUrl } from './downloader.js';
 
 const FILENAME_TEMPLATES: Record<FilenamePreset, string> = {
   title: '%(title)s.%(ext)s',
@@ -116,9 +117,18 @@ export function buildFlags(answers: Answers): string[] {
 
   // Playlist handling
   switch (answers.playlist.kind) {
-    case 'single':
-      flags.push('--no-playlist');
+    case 'single': {
+      // `--no-playlist` only works when the URL refers to a video AND a
+      // playlist. For a bare playlist URL it is a no-op and yt-dlp would
+      // download every entry, so pin to the first item instead.
+      const firstUrl = answers.urls[0];
+      if (firstUrl && isPlaylistOnlyUrl(firstUrl)) {
+        flags.push('--playlist-items', '1');
+      } else {
+        flags.push('--no-playlist');
+      }
       break;
+    }
     case 'all':
       flags.push('--yes-playlist');
       break;

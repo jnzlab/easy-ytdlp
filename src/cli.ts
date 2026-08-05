@@ -345,12 +345,15 @@ async function runWizard(urlsArg?: string[], opts: CliOptions = {}) {
     const u = urls[i]!;
     if (r.status === 'fulfilled') {
       const m = r.value as VideoMeta;
+      const isPlaylist = m._type === 'playlist';
       videoInfos.push({
         url: u,
         meta: m,
         title: m.title ?? 'Unknown title',
         uploader: m.uploader ?? 'Unknown uploader',
-        duration: formatDuration(m.duration),
+        duration: isPlaylist
+          ? `${m.playlist_count ?? '?'} videos`
+          : formatDuration(m.duration),
       });
     } else {
       failedUrls.push(u);

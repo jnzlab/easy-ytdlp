@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Pasting a bare YouTube playlist link no longer fails/hangs at startup. The
+  metadata fetch now uses `--flat-playlist` for playlist URLs (fast, one small
+  line per video) and shows the playlist title + video count instead of dumping
+  full metadata for every video. "Just this video" on a bare playlist URL now
+  downloads only the first entry (`--playlist-items 1`) instead of the whole
+  playlist.
+
 ## 1.1.0 - 2026-07-27
 
 ### Added

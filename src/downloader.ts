@@ -104,6 +104,99 @@ function humanizeError(raw: string): string {
   return raw.trim() || 'Download failed for an unknown reason.';
 }
 
+const YOUTUBE_HOST_RE = /(\.|^)youtube\.com$/i;
+const YOUTUBE_SHORT_HOST_RE = /(\.|^)youtu\.be$/i;
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+
+/**
+ * True when the URL is a bare playlist (a `list` param with no concrete
+ * video id). For these, yt-dlp's `--no-playlist` is a no-op: it still
+ * extracts *every* video's metadata, which is slow and makes the
+ * `--dump-json` output explode (one full JSON per entry).
+ */
+export function isPlaylistOnlyUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase();
+  const isYoutube =
+    YOUTUBE_HOST_RE.test(host) || YOUTUBE_SHORT_HOST_RE.test(host);
+  if (!isYoutube || !u.searchParams.has('list')) return false;
+
+  // Concrete video forms: watch?v=<id>, youtu.be/<id>, /shorts|embed|live/<id>
+  const v = u.searchParams.get('v') ?? '';
+  if (VIDEO_ID_RE.test(v)) return false;
+  if (host.endsWith('youtu.be') && u.pathname.length > 1) return false;
+  if (/^\/(?:shorts|embed|live)\/[A-Za-z0-9_-]{11}/.test(u.pathname)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * yt-dlp flags for fetching metadata of a single URL. Bare playlist URLs
+ * use `--flat-playlist` so only a tiny per-entry listing is dumped;
+ * video URLs keep `--no-playlist` to skip the rest of the playlist.
+ *
+ * `-f best` is passed explicitly so yt-dlp-wrap's getVideoInfo doesn't
+ * append its own copy after the URL.
+ */
+function metadataArgs(url: string): string[] {
+  const scopeFlags = isPlaylistOnlyUrl(url)
+    ? ['--flat-playlist', '-f', 'best']
+    : ['--no-playlist'];
+  return [...youtubeCompatFlags(), ...scopeFlags, url];
+}
+
+type FlatPlaylistEntry = {
+  id?: string;
+  title?: string;
+  _type?: string;
+  playlist?: string | null;
+  playlist_id?: string | null;
+  playlist_title?: string | null;
+  playlist_uploader?: string | null;
+  playlist_count?: number | null;
+  n_entries?: number | null;
+};
+
+/**
+ * `--flat-playlist --dump-json` prints one line per entry, which
+ * yt-dlp-wrap's getVideoInfo turns into an array (or a single object for
+ * one-video playlists). Fold that back into one playlist-shaped metadata
+ * object the wizard can display and ask questions about.
+ */
+function normalizePlaylistMeta(raw: unknown, url: string): unknown {
+  const entries: FlatPlaylistEntry[] = Array.isArray(raw)
+    ? (raw as FlatPlaylistEntry[])
+    : raw && typeof raw === 'object'
+      ? [raw as FlatPlaylistEntry]
+      : [];
+  const first = entries[0];
+  if (!first) {
+    // Empty/private playlist — no entries to read a title from, but keep
+    // the playlist shape so the wizard still recognizes and displays it.
+    return { _type: 'playlist', webpage_url: url, playlist_count: 0, entries: [] };
+  }
+
+  const count = first.playlist_count ?? first.n_entries ?? entries.length;
+  return {
+    _type: 'playlist',
+    id: first.playlist_id ?? first.id,
+    title: first.playlist_title ?? first.playlist ?? first.title,
+    uploader: first.playlist_uploader,
+    playlist: first.playlist_title ?? first.playlist,
+    playlist_id: first.playlist_id,
+    playlist_count: count,
+    n_entries: count,
+    webpage_url: url,
+    entries,
+  };
+}
+
 /**
  * Fetch video metadata via yt-dlp --dump-json (no download).
  */
@@ -111,13 +204,10 @@ export async function fetchMetadata(
   ytDlp: YTDlpWrapInstance,
   url: string,
 ): Promise<unknown> {
+  const playlistOnly = isPlaylistOnlyUrl(url);
   try {
-    // getVideoInfo accepts a string URL or an args array
-    return await ytDlp.getVideoInfo([
-      ...youtubeCompatFlags(),
-      '--no-playlist',
-      url,
-    ]);
+    const raw = await ytDlp.getVideoInfo(metadataArgs(url));
+    return playlistOnly ? normalizePlaylistMeta(raw, url) : raw;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(humanizeError(msg));
@@ -392,9 +482,7 @@ export async function runDownload(
       }
       if (code !== 0 && code !== null) {
         reject(
-          new Error(
-            humanizeError(lastError || `yt-dlp exited with code ${code}`),
-          ),
+          new Error(humanizeError(lastError || `yt-dlp exited with code ${code}`)),
         );
         return;
       }

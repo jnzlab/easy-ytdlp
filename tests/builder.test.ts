@@ -152,6 +152,20 @@ describe('buildFlags', () => {
     expect(flags).toContain('2:5');
   });
 
+  it('pins to the first item for a bare playlist URL in single mode', () => {
+    const flags = buildFlags(
+      base({
+        urls: [
+          'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf',
+        ],
+        playlist: { kind: 'single' },
+      }),
+    );
+    expect(flags).toContain('--playlist-items');
+    expect(flags).toContain('1');
+    expect(flags).not.toContain('--no-playlist');
+  });
+
   it('maps filename presets', () => {
     const channel = buildFlags(base({ filenamePreset: 'title-channel' }));
     expect(channel).toContain(FILENAME_TEMPLATES['title-channel']);
