@@ -31,7 +31,19 @@ import { showCommand, showSaved, showNote } from './ui.js';
 import { youtubeCompatFlags } from './youtube-compat.js';
 import { progressFlags } from './downloader.js';
 
-const CLI_VERSION = '1.1.0';
+/** Read the version from package.json so it can never drift from npm. */
+function readCliVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+const CLI_VERSION = readCliVersion();
 
 type CliOptions = {
   showCommand?: boolean;
@@ -362,7 +374,19 @@ async function runWizard(urlsArg?: string[], opts: CliOptions = {}) {
 
   if (videoInfos.length === 0) {
     spinner.stop('Could not fetch metadata');
-    p.log.error('Failed to fetch metadata for any of the provided URLs.');
+    const reasons = metaResults
+      .filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      )
+      .map((r) =>
+        r.reason instanceof Error ? r.reason.message : String(r.reason),
+      );
+    p.log.error(
+      [
+        'Failed to fetch metadata for any of the provided URLs.',
+        ...new Set(reasons),
+      ].join('\n\n'),
+    );
     process.exit(1);
   }
 

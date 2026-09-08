@@ -141,14 +141,26 @@ export function isPlaylistOnlyUrl(url: string): boolean {
  * use `--flat-playlist` so only a tiny per-entry listing is dumped;
  * video URLs keep `--no-playlist` to skip the rest of the playlist.
  *
- * `-f best` is passed explicitly so yt-dlp-wrap's getVideoInfo doesn't
- * append its own copy after the URL.
+ * yt-dlp-wrap's getVideoInfo appends `-f best` unless a format flag is
+ * already present. YouTube frequently has no pre-merged "best" format
+ * any more, which makes yt-dlp abort with "Requested format is not
+ * available" before it dumps any JSON. We only need title/uploader/
+ * duration here, so pass our own `-f b` (same selector, no warning) and
+ * `--ignore-no-formats-error` so metadata never depends on a resolvable
+ * format.
  */
 function metadataArgs(url: string): string[] {
   const scopeFlags = isPlaylistOnlyUrl(url)
-    ? ['--flat-playlist', '-f', 'best']
+    ? ['--flat-playlist']
     : ['--no-playlist'];
-  return [...youtubeCompatFlags(), ...scopeFlags, url];
+  return [
+    ...youtubeCompatFlags(),
+    ...scopeFlags,
+    '--ignore-no-formats-error',
+    '-f',
+    'b',
+    url,
+  ];
 }
 
 type FlatPlaylistEntry = {

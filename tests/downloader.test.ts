@@ -178,6 +178,26 @@ describe('fetchMetadata', () => {
     expect(meta.id).toBe('x');
   });
 
+  it('never lets a missing pre-merged format abort the metadata fetch', async () => {
+    const { ytDlp, calls } = makeFakeYtDlp([
+      { exit: 'close', code: 0, meta: { id: 'x', title: 'T' } },
+      { exit: 'close', code: 0, meta: [{ id: 'a', title: 'A' }] },
+    ]);
+
+    await fetchMetadata(ytDlp, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    await fetchMetadata(ytDlp, 'https://www.youtube.com/playlist?list=PL123');
+
+    for (const args of calls) {
+      // yt-dlp-wrap injects `-f best` (which YouTube often can't satisfy)
+      // unless a format flag is already present.
+      expect(args).toContain('-f');
+      expect(args).not.toContain('best');
+      expect(args).toContain('--ignore-no-formats-error');
+      // The URL must stay last so flags aren't parsed as extra URLs.
+      expect(args[args.length - 1]).toMatch(/^https:/);
+    }
+  });
+
   it('uses --flat-playlist for bare playlist URLs and normalizes entries', async () => {
     const { ytDlp, calls } = makeFakeYtDlp([
       {

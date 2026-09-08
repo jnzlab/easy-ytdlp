@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.1.4 - 2026-09-08
 
 ### Fixed
 
+- Interactive mode no longer fails with "Failed to fetch metadata for any of
+  the provided URLs" on videos that have no pre-merged format. `yt-dlp-wrap`
+  silently added `-f best` to the metadata call, which YouTube now rejects for
+  many videos; the metadata fetch passes `--ignore-no-formats-error` and its
+  own format flag instead. When every URL fails, the underlying yt-dlp error is
+  now shown instead of a generic message.
+- `--version` now reads the version from `package.json` instead of a
+  hardcoded constant that had drifted from the published version.
+- Removed an accidental dependency of the package on itself.
 - Pasting a bare YouTube playlist link no longer fails/hangs at startup. The
   metadata fetch now uses `--flat-playlist` for playlist URLs (fast, one small
   line per video) and shows the playlist title + video count instead of dumping
