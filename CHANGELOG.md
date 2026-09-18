@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 - 2026-09-18
+
+### Added
+
+- When a download or metadata fetch fails because YouTube's JS challenge could
+  not be solved, easy-ytdlp now offers to install Deno for you
+  (`curl -fsSL https://deno.land/install.sh | sh`, or the PowerShell one-liner
+  on Windows) and retries automatically once it is installed. Declining prints
+  the command so you can install it yourself and come back.
+- yt-dlp is now pointed at a Deno binary in `~/.deno/bin` even when that
+  directory is not yet on `PATH` (which is the case right after installing it).
+
 ## 1.1.4 - 2026-09-08
 
 ### Fixed

@@ -28,6 +28,7 @@ import type {
   VideoQuality,
 } from './types.js';
 import { showCommand, showSaved, showNote } from './ui.js';
+import { isJsRuntimeError, offerDenoInstall } from './deno.js';
 import { youtubeCompatFlags } from './youtube-compat.js';
 import { progressFlags } from './downloader.js';
 
@@ -264,11 +265,18 @@ async function ensureFfmpegIfNeeded(answers: Answers): Promise<void> {
   }
 }
 
+type DownloadFailure = { url: string; message: string };
+
+/**
+ * Download every URL, collecting failures instead of throwing so one bad
+ * URL never hides the rest — the caller decides how to report them.
+ */
 async function runDownloads(
   ytDlp: Awaited<ReturnType<typeof createYtDlp>>,
   answers: Answers,
-): Promise<string[]> {
-  const allPaths: string[] = [];
+): Promise<{ filepaths: string[]; failures: DownloadFailure[] }> {
+  const filepaths: string[] = [];
+  const failures: DownloadFailure[] = [];
 
   for (let i = 0; i < answers.urls.length; i++) {
     const url = answers.urls[i]!;
@@ -280,14 +288,171 @@ async function runDownloads(
 
     try {
       const result = await runDownload(ytDlp, flags, { label });
-      allPaths.push(...result.filepaths);
+      filepaths.push(...result.filepaths);
     } catch (err) {
-      if (answers.urls.length === 1) throw err;
-      p.log.warn(err instanceof Error ? err.message : String(err));
+      failures.push({
+        url,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  return allPaths;
+  return { filepaths, failures };
+}
+
+type VideoInfo = {
+  url: string;
+  meta: VideoMeta;
+  title: string;
+  uploader: string;
+  duration: string;
+};
+
+/**
+ * Fetch metadata for every URL. When every URL fails because no JS runtime
+ * could solve YouTube's challenge, offer to install Deno and try once more.
+ */
+async function gatherMetadata(
+  ytDlp: Awaited<ReturnType<typeof createYtDlp>>,
+  urls: string[],
+  spinner: ReturnType<typeof p.spinner>,
+): Promise<{ videoInfos: VideoInfo[]; failedUrls: string[] }> {
+  for (let attempt = 0; ; attempt++) {
+    spinner.start(
+      attempt === 0 ? 'Fetching video info…' : 'Fetching video info with Deno…',
+    );
+    const metaResults = await Promise.allSettled(
+      urls.map((u) => fetchMetadata(ytDlp, u)),
+    );
+
+    const videoInfos: VideoInfo[] = [];
+    const failedUrls: string[] = [];
+
+    for (let i = 0; i < metaResults.length; i++) {
+      const r = metaResults[i]!;
+      const u = urls[i]!;
+      if (r.status === 'fulfilled') {
+        const m = r.value as VideoMeta;
+        const isPlaylist = m._type === 'playlist';
+        videoInfos.push({
+          url: u,
+          meta: m,
+          title: m.title ?? 'Unknown title',
+          uploader: m.uploader ?? 'Unknown uploader',
+          duration: isPlaylist
+            ? `${m.playlist_count ?? '?'} videos`
+            : formatDuration(m.duration),
+        });
+      } else {
+        failedUrls.push(u);
+      }
+    }
+
+    if (videoInfos.length > 0) {
+      spinner.stop('Metadata loaded');
+      return { videoInfos, failedUrls };
+    }
+
+    spinner.stop('Could not fetch metadata');
+    const reasons = [
+      ...new Set(
+        metaResults
+          .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          .map((r) =>
+            r.reason instanceof Error ? r.reason.message : String(r.reason),
+          ),
+      ),
+    ];
+    p.log.error(
+      [
+        'Failed to fetch metadata for any of the provided URLs.',
+        ...reasons,
+      ].join('\n\n'),
+    );
+
+    if (
+      attempt === 0 &&
+      reasons.some(isJsRuntimeError) &&
+      (await offerDenoInstall())
+    ) {
+      continue;
+    }
+    process.exit(1);
+  }
+}
+
+function reportSaved(filepaths: string[], answers: Answers): void {
+  if (filepaths.length > 0) {
+    showSaved(filepaths);
+    return;
+  }
+  p.log.success('Done. (No filepath printed — check your output folder.)');
+  p.log.info(`Output folder: ${answers.outputDir}`);
+}
+
+/**
+ * Download, report results, and exit non-zero when nothing downloaded.
+ * Failures caused by a missing JS runtime get one offer to install Deno,
+ * followed by a retry of just those URLs.
+ */
+async function downloadAndReport(
+  ytDlp: Awaited<ReturnType<typeof createYtDlp>>,
+  answers: Answers,
+  options: { canPrompt?: boolean } = {},
+): Promise<void> {
+  const allPaths: string[] = [];
+  let pending = answers.urls;
+
+  for (let attempt = 0; ; attempt++) {
+    p.log.info(
+      attempt === 0
+        ? 'Starting download…'
+        : 'Retrying the failed downloads with Deno…',
+    );
+
+    const { filepaths, failures } = await runDownloads(ytDlp, {
+      ...answers,
+      urls: pending,
+    });
+    allPaths.push(...filepaths);
+
+    if (failures.length === 0) {
+      reportSaved(allPaths, answers);
+      p.outro('Finished');
+      return;
+    }
+
+    for (const failure of failures) {
+      p.log.error(
+        answers.urls.length > 1
+          ? `${failure.url}\n${failure.message}`
+          : failure.message,
+      );
+    }
+
+    const jsRuntimeFailures = failures.filter((f) =>
+      isJsRuntimeError(f.message),
+    );
+    if (
+      attempt === 0 &&
+      jsRuntimeFailures.length > 0 &&
+      (await offerDenoInstall({ canPrompt: options.canPrompt }))
+    ) {
+      pending = jsRuntimeFailures.map((f) => f.url);
+      continue;
+    }
+
+    if (allPaths.length > 0) {
+      // Some URLs did download — keep those results, but say what failed.
+      reportSaved(allPaths, answers);
+      p.log.warn(`${failures.length} download(s) failed.`);
+      p.outro('Finished with errors');
+      return;
+    }
+
+    p.outro('Failed');
+    process.exit(1);
+  }
 }
 
 async function runWizard(urlsArg?: string[], opts: CliOptions = {}) {
@@ -318,79 +483,12 @@ async function runWizard(urlsArg?: string[], opts: CliOptions = {}) {
       showCommandForAnswers(answers);
     }
     await ensureFfmpegIfNeeded(answers);
-    p.log.info('Starting download…');
-    try {
-      const filepaths = await runDownloads(ytDlp, answers);
-      if (filepaths.length > 0) {
-        showSaved(filepaths);
-      } else {
-        p.log.success('Done. (No filepath printed — check your output folder.)');
-        p.log.info(`Output folder: ${answers.outputDir}`);
-      }
-      p.outro('Finished');
-    } catch (err) {
-      p.log.error(err instanceof Error ? err.message : String(err));
-      p.outro('Failed');
-      process.exit(1);
-    }
+    await downloadAndReport(ytDlp, answers, { canPrompt: false });
     return;
   }
 
   // Fetch metadata for all URLs in parallel to display info for each
-  spinner.start('Fetching video info…');
-  const metaResults = await Promise.allSettled(
-    urls.map((u) => fetchMetadata(ytDlp, u)),
-  );
-
-  type VideoInfo = {
-    url: string;
-    meta: VideoMeta;
-    title: string;
-    uploader: string;
-    duration: string;
-  };
-  const videoInfos: VideoInfo[] = [];
-  const failedUrls: string[] = [];
-
-  for (let i = 0; i < metaResults.length; i++) {
-    const r = metaResults[i]!;
-    const u = urls[i]!;
-    if (r.status === 'fulfilled') {
-      const m = r.value as VideoMeta;
-      const isPlaylist = m._type === 'playlist';
-      videoInfos.push({
-        url: u,
-        meta: m,
-        title: m.title ?? 'Unknown title',
-        uploader: m.uploader ?? 'Unknown uploader',
-        duration: isPlaylist
-          ? `${m.playlist_count ?? '?'} videos`
-          : formatDuration(m.duration),
-      });
-    } else {
-      failedUrls.push(u);
-    }
-  }
-
-  if (videoInfos.length === 0) {
-    spinner.stop('Could not fetch metadata');
-    const reasons = metaResults
-      .filter(
-        (r): r is PromiseRejectedResult => r.status === 'rejected',
-      )
-      .map((r) =>
-        r.reason instanceof Error ? r.reason.message : String(r.reason),
-      );
-    p.log.error(
-      [
-        'Failed to fetch metadata for any of the provided URLs.',
-        ...new Set(reasons),
-      ].join('\n\n'),
-    );
-    process.exit(1);
-  }
-
-  spinner.stop('Metadata loaded');
+  const { videoInfos, failedUrls } = await gatherMetadata(ytDlp, urls, spinner);
 
   // Show 'Found' note with all successfully fetched video info
   if (videoInfos.length === 1) {
@@ -434,22 +532,7 @@ async function runWizard(urlsArg?: string[], opts: CliOptions = {}) {
   }
 
   await ensureFfmpegIfNeeded(answers);
-
-  p.log.info('Starting download…');
-  try {
-    const filepaths = await runDownloads(ytDlp, answers);
-    if (filepaths.length > 0) {
-      showSaved(filepaths);
-    } else {
-      p.log.success('Done. (No filepath printed — check your output folder.)');
-      p.log.info(`Output folder: ${answers.outputDir}`);
-    }
-    p.outro('Finished');
-  } catch (err) {
-    p.log.error(err instanceof Error ? err.message : String(err));
-    p.outro('Failed');
-    process.exit(1);
-  }
+  await downloadAndReport(ytDlp, answers);
 }
 
 async function runUpdateBinary() {

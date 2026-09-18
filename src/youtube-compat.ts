@@ -1,5 +1,6 @@
 import { accessSync, constants, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { findDeno } from './deno.js';
 
 /** yt-dlp's EJS wiki recommends Node 22+ for the challenge solver. */
 const MIN_RECOMMENDED_MAJOR = 22;
@@ -66,11 +67,17 @@ export function resolveNodeForYtDlp(): { path: string; major: number } {
  * YouTube now requires an external JS runtime to solve challenge scripts (EJS).
  * Deno is the only runtime enabled by default; Node must be opted in explicitly.
  *
+ * yt-dlp finds Deno on PATH by itself, but a Deno we just installed lives in
+ * `~/.deno/bin`, which only lands on PATH in shells started later — so pass
+ * its location explicitly when we can see it.
+ *
  * @see https://github.com/yt-dlp/yt-dlp/wiki/EJS
  */
 export function youtubeCompatFlags(): string[] {
   const { path } = resolveNodeForYtDlp();
+  const deno = findDeno();
   return [
+    ...(deno ? ['--js-runtimes', `deno:${deno}`] : []),
     '--js-runtimes',
     `node:${path}`,
     // Fallback if the cached binary's bundled EJS scripts are missing/outdated

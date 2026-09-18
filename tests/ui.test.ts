@@ -102,10 +102,25 @@ describe('youtubeCompatFlags', () => {
   it('enables a Node binary as a JS runtime', () => {
     const flags = youtubeCompatFlags();
     expect(flags).toContain('--js-runtimes');
-    const runtime = flags[flags.indexOf('--js-runtimes') + 1];
-    expect(runtime).toMatch(/^node:/);
+    // A Deno runtime may be listed first (it has priority in yt-dlp), so
+    // collect every runtime value rather than only the first one.
+    const runtimes = flags.filter(
+      (flag, i) => flags[i - 1] === '--js-runtimes',
+    );
+    expect(runtimes.some((r) => r.startsWith('node:'))).toBe(true);
     expect(flags).toContain('--remote-components');
     expect(flags).toContain('ejs:github');
+  });
+
+  it('points yt-dlp at a Deno binary when one is installed', async () => {
+    const { findDeno } = await import('../src/deno.js');
+    const deno = findDeno();
+    const flags = youtubeCompatFlags();
+    if (deno) {
+      expect(flags).toContain(`deno:${deno}`);
+    } else {
+      expect(flags.some((f) => f.startsWith('deno:'))).toBe(false);
+    }
   });
 
   it('prefers nvm Node 22+ when the active process is older', async () => {

@@ -2,6 +2,7 @@ import cliProgress from 'cli-progress';
 import type { YTDlpWrapInstance } from './yt-dlp-wrap.js';
 import { ffmpegInstallHint } from './ffmpeg.js';
 import { youtubeCompatFlags } from './youtube-compat.js';
+import { isJsRuntimeError } from './deno.js';
 
 export interface DownloadResult {
   filepaths: string[];
@@ -43,20 +44,15 @@ function humanizeError(raw: string): string {
     ].join('\n');
   }
 
-  if (
-    lower.includes('http error 403') ||
-    lower.includes('403: forbidden') ||
-    lower.includes('javascript runtime') ||
-    lower.includes('js challenge') ||
-    lower.includes('n challenge')
-  ) {
+  if (isJsRuntimeError(lower)) {
     return [
       'YouTube blocked the download (often HTTP 403) — usually because a JavaScript runtime is needed to solve YouTube challenges.',
       '',
-      'easy-ytdlp now enables Node automatically. If this still fails:',
+      'easy-ytdlp enables Node automatically, but yt-dlp solves these challenges most reliably with Deno.',
+      '',
+      'If Deno does not help, also try:',
       '  1. Update the yt-dlp binary:  easy-ytdlp update-binary',
       '  2. Use Node 22+ (recommended by yt-dlp for the JS solver)',
-      '  3. Or install Deno: https://deno.land  (yt-dlp’s preferred runtime)',
       '',
       'More detail: https://github.com/yt-dlp/yt-dlp/wiki/EJS',
       '',
